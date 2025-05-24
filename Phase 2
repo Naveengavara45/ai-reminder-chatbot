@@ -1,0 +1,147 @@
+
+## ✅ **Step 1: Set up OpenAI API in Backend (`server/server.js`)**
+
+### 1.1 Install necessary packages:
+
+```bash
+npm install express dotenv axios openai chrono-node mongoose cors
+```
+
+### 1.2 `.env` file
+
+```env
+OPENAI_API_KEY=your_openai_api_key
+```
+
+### 1.3 `server.js`
+
+```js
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const { Configuration, OpenAIApi } = require('openai');
+const chrono = require('chrono-node');
+const mongoose = require('mongoose');
+
+dotenv.config();
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// OpenAI setup
+const openai = new OpenAIApi(new Configuration({
+  apiKey: process.env.OPENAI_API_KEY,
+}));
+
+// Mongoose setup for reminders
+mongoose.connect('mongodb://localhost:27017/reminders', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+const reminderSchema = new mongoose.Schema({
+  text: String,
+  time: Date,
+});
+const Reminder = mongoose.model('Reminder', reminderSchema);
+
+// Chat route
+app.post('/chat', async (req, res) => {
+  const userMessage = req.body.message;
+
+  // 1. Check for reminder time using chrono-node
+  const parsedDate = chrono.parseDate(userMessage);
+
+  if (parsedDate) {
+    // Save reminder to database
+    const reminder = new Reminder({
+      text: userMessage,
+      time: parsedDate,
+    });
+    await reminder.save();
+
+    return res.json({ type: 'reminder', message: `Reminder set for ${parsedDate}` });
+  }
+
+  // 2. Fallback to OpenAI chat response
+  try {
+    const response = await openai.createChatCompletion({
+      model: 'gpt-4',
+      messages: [{ role: 'user', content: userMessage }],
+    });
+
+    const aiMessage = response.data.choices[0].message.content;
+    res.json({ type: 'ai', message: aiMessage });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Error fetching response from OpenAI.' });
+  }
+});
+
+app.listen(5000, () => console.log('Server running on port 5000'));
+```
+
+---
+
+## ✅ **Step 2: Frontend Integration (React Example)**
+
+### 2.1 Basic Components
+
+```jsx
+// ChatApp.jsx
+import React, { useState } from 'react';
+import axios from 'axios';
+
+const ChatApp = () => {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+
+  const sendMessage = async () => {
+    if (!input.trim()) return;
+
+    const newMessage = { role: 'user', text: input };
+    setMessages([...messages, newMessage]);
+
+    try {
+      const res = await axios.post('http://localhost:5000/chat', { message: input });
+      const reply = {
+        role: res.data.type === 'ai' ? 'ai' : 'reminder',
+        text: res.data.message,
+      };
+      setMessages((msgs) => [...msgs, reply]);
+      setInput('');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  return (
+    <div style={{ padding: 20 }}>
+      <h2>Chat with Reminder AI</h2>
+      <div style={{ height: 300, overflowY: 'auto', border: '1px solid #ccc', padding: 10 }}>
+        {messages.map((msg, i) => (
+          <div key={i} style={{ margin: '10px 0', textAlign: msg.role === 'user' ? 'right' : 'left' }}>
+            <b>{msg.role === 'user' ? 'You' : (msg.role === 'reminder' ? '📅 ReminderBot' : '🤖 ChatGPT')}:</b> {msg.text}
+          </div>
+        ))}
+      </div>
+      <input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        placeholder="Type a message..."
+        style={{ width: '80%' }}
+      />
+      <button onClick={sendMessage} style={{ width: '18%' }}>Send</button>
+    </div>
+  );
+};
+
+export default ChatApp;
+```
+
+---
+
+## ✅ **Result**
+
+* When the user says something like **"Remind me to call John at 8 PM"**, `chrono-node` detects the time, and the app confirms: **"Reminder set for \[DateTime]"**.
+* If no time is found, the query is sent to ChatGPT and the response is shown.
